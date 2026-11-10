@@ -1,0 +1,94 @@
+name: 构建 Android APK
+
+# 触发方式：
+#   1. 手动：仓库页面 → Actions → 左侧「构建 Android APK」→ Run workflow
+#   2. 自动：push 到 main / master 且改动涉及下面列出的文件时自动构建
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "native/**"
+      - "app/**"
+      - "core/**"
+      - "main.py"
+      - "buildozer.spec"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: read
+
+# 同一分支重复触发时取消旧任务，避免两个构建同时抢缓存
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: buildozer android debug
+    runs-on: ubuntu-latest
+    # 首次构建要下载 Android SDK / NDK 并编译 Python 及各依赖，通常 40~90 分钟，
+    # 给到 120 分钟上限；有缓存后一般 15~30 分钟。
+    timeout-minutes: 120
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 缓存 buildozer（SDK/NDK）与 pip / Gradle 缓存
+        uses: actions/cache@v4
+        with:
+          # ~/.buildozer 里是 Android SDK、NDK、p4a 下载的源码；
+          # ~/.cache 是 pip 缓存；~/.gradle 是 Gradle 依赖缓存。
+          path: |
+            ~/.buildozer
+            ~/.cache
+            ~/.gradle
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-
+
+      - name: 释放磁盘空间（预装工具占空间，首次构建约需 10GB）
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: 准备 Docker 挂载目录权限
+        run: |
+          mkdir -p "$HOME/.buildozer" "$HOME/.cache" "$HOME/.gradle"
+          # kivy/buildozer 镜像内以非 root 用户运行，而 GitHub 工作区文件属于 runner，
+          # 需要放开写权限，否则 buildozer 无法写 .buildozer/ 与 bin/。
+          chmod -R a+rwX "$GITHUB_WORKSPACE" "$HOME/.buildozer" "$HOME/.cache" "$HOME/.gradle"
+
+      - name: 拉取官方 buildozer 镜像
+        run: docker pull kivy/buildozer:latest
+
+      - name: 构建 debug APK
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE":/home/user/hostcwd \
+            --volume "$HOME/.buildozer":/home/user/.buildozer \
+            --volume "$HOME/.cache":/home/user/.cache \
+            --volume "$HOME/.gradle":/home/user/.gradle \
+            --env HOME=/home/user \
+            --env LANG=C.UTF-8 \
+            --env LC_ALL=C.UTF-8 \
+            --env APP_ANDROID_ACCEPT_SDK_LICENSE=1 \
+            kivy/buildozer android debug
+
+      - name: 检查 APK 产物
+        run: |
+          echo "bin/ 目录内容："
+          ls -lh bin/ || true
+          if ! ls bin/*.apk >/dev/null 2>&1; then
+            echo "::error::构建结束但没有找到 bin/*.apk，请查看上面的 buildozer 日志"
+            exit 1
+          fi
+
+      - name: 上传 APK（artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: coursekit-debug-apk
+          path: bin/*.apk
+          if-no-files-found: error
+          retention-days: 30

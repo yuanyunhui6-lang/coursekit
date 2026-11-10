@@ -1,0 +1,3 @@
+# 电脑端开发/测试依赖
+-r requirements.txt
+pytest>=8.0.0
