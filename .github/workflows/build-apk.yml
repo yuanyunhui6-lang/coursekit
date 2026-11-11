@@ -13,6 +13,7 @@ on:
       - "core/**"
       - "main.py"
       - "buildozer.spec"
+      - "assets/**"
       - ".github/workflows/build-apk.yml"
 
 permissions:
@@ -26,79 +27,87 @@ concurrency:
 jobs:
   build-apk:
     name: buildozer android debug
-    runs-on: ubuntu-latest
-    # 首次构建要下载 Android SDK / NDK 并编译 Python 及各依赖，通常 40~90 分钟，
-    # 给到 120 分钟上限；有缓存后一般 15~30 分钟。
+    # 固定用 ubuntu-22.04：libtinfo5 / openjdk-17 等构建依赖齐全，
+    # 且与 p4a 2024.1.21 这套成熟工具链匹配（默认 Python 3.11.5）。
+    runs-on: ubuntu-22.04
+    # 首次构建要下载 Android SDK/NDK 并编译 Python 与 Kivy，通常 30~60 分钟；
+    # 命中缓存后一般 15~30 分钟。
     timeout-minutes: 120
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 缓存 buildozer（SDK/NDK）与 pip / Gradle 缓存
+      - name: 安装 Python 3.10（buildozer 运行环境）
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 缓存 buildozer（SDK/NDK）/ Gradle / pip
         uses: actions/cache@v4
         with:
-          # ~/.buildozer 里是 Android SDK、NDK、p4a 下载的源码；
-          # ~/.cache 是 pip 缓存；~/.gradle 是 Gradle 依赖缓存。
           path: |
             ~/.buildozer
-            ~/.cache
+            .buildozer
             ~/.gradle
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+            ~/.cache/pip
+          key: ${{ runner.os }}-p4a2024-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            ${{ runner.os }}-buildozer-
+            ${{ runner.os }}-p4a2024-
 
-      - name: 释放磁盘空间（预装工具占空间，首次构建约需 10GB）
+      - name: 安装系统依赖
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk-headless \
+            autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev
+          java -version
           df -h /
 
-      - name: 准备 Docker 挂载目录权限
+      - name: 安装 buildozer + python-for-android（固定版本）
         run: |
-          mkdir -p "$HOME/.buildozer" "$HOME/.cache" "$HOME/.gradle"
-          # kivy/buildozer 镜像内以非 root 用户运行，而 GitHub 工作区文件属于 runner，
-          # 需要放开写权限，否则 buildozer 无法写 .buildozer/ 与 bin/。
-          chmod -R a+rwX "$GITHUB_WORKSPACE" "$HOME/.buildozer" "$HOME/.cache" "$HOME/.gradle"
-
-      - name: 拉取官方 buildozer 镜像
-        run: docker pull kivy/buildozer:latest
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "buildozer==1.5.0" "python-for-android==2024.1.21"
+          python -m pip show python-for-android | head -5
 
       - name: 构建环境自检
         run: |
-          echo "=== Docker / 磁盘 ==="
-          docker version --format '{{.Server.Version}}' || true
-          df -h / | tail -1
-          echo "=== 镜像内工具版本 ==="
-          docker run --rm --entrypoint bash kivy/buildozer:latest -lc \
-            "buildozer --version 2>&1 | head -3; python3 --version; java -version 2>&1 | head -2; echo NDK:; ls ~/.buildozer/android/platform 2>/dev/null | head || true" || true
+          buildozer --version
+          python --version
+          echo "=== buildozer.spec 关键项 ==="
+          python - <<'PY'
+          import configparser
+          cp = configparser.ConfigParser(interpolation=None)
+          cp.read("buildozer.spec", encoding="utf-8")
+          for k in ("title", "package.name", "requirements", "android.api", "android.minapi", "android.ndk", "android.archs", "android.gradle_dependencies"):
+              print(f"{k} = {cp.get('app', k, fallback='')}")
+          PY
 
       - name: 构建 debug APK
         id: build
         run: |
           set -o pipefail
-          docker run --rm \
-            --volume "$GITHUB_WORKSPACE":/home/user/hostcwd \
-            --volume "$HOME/.buildozer":/home/user/.buildozer \
-            --volume "$HOME/.cache":/home/user/.cache \
-            --volume "$HOME/.gradle":/home/user/.gradle \
-            --env HOME=/home/user \
-            --env LANG=C.UTF-8 \
-            --env LC_ALL=C.UTF-8 \
-            --env APP_ANDROID_ACCEPT_SDK_LICENSE=1 \
-            kivy/buildozer android debug 2>&1 | tee buildozer.log
+          buildozer android debug 2>&1 | tee buildozer.log
 
       - name: 失败时把错误写进注解（供 API 读取）
         if: failure()
         run: |
           python3 - <<'PY'
-          import os
+          import os, re
           path = "buildozer.log"
           if os.path.exists(path):
               with open(path, errors="replace") as fh:
                   lines = fh.read().splitlines()
-              tail = "\n".join(lines[-45:])
+              patterns = re.compile(
+                  r"(?i)(error:|fatal error|command failed|traceback|"
+                  r"recipe .*(failed|error)|no such file|undefined reference|"
+                  r"could not find|failed to)")
+              hits = [ln for ln in lines if patterns.search(ln)]
+              tail = "\n".join((hits or lines)[-40:])
           else:
-              tail = "buildozer.log 不存在：构建在 docker 启动前就失败了"
+              tail = "buildozer.log 不存在：构建在 buildozer 启动前就失败了"
           escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           if len(escaped) > 60000:
               escaped = escaped[-60000:]
@@ -120,7 +129,7 @@ jobs:
           echo "bin/ 目录内容："
           ls -lh bin/ || true
           if ! ls bin/*.apk >/dev/null 2>&1; then
-            echo "::error::构建结束但没有找到 bin/*.apk，请查看上面的 buildozer 日志"
+            echo "::error::构建结束但没有找到 bin/*.apk，请查看 buildozer-log"
             exit 1
           fi
 

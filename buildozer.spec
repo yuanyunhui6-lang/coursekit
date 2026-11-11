@@ -25,7 +25,7 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,json,txt,md,csv
 # - venv / .venv / .tmp_pip / .pip-cache：本地 Python 环境（体积巨大，绝不能进 APK）
 # - docs / .github：文档与 CI 配置
 # 说明：以 “.” 开头的目录（.venv/.git/.github）buildozer 默认也会排除，这里显式写出更直观。
-source.exclude_dirs = tests, tools, samples, smoke_data, diag_data, data, bin, venv, .venv, .tmp_pip, .pip-cache, docs, .github, .git, .idea, .kivy, __pycache__
+source.exclude_dirs = tests, tools, samples, smoke_data, diag_data, data, bin, venv, .venv, .buildozer, .tmp_pip, .pip-cache, docs, .github, .git, .idea, .kivy, __pycache__
 
 # 排除文件模式
 source.exclude_patterns = *.pyc, *.pyo, *.log, *.tmp, *.spec
@@ -65,7 +65,7 @@ android.targetapi = 33
 android.ndk = 25b
 
 # CPU 架构：只保留主流 ARM 架构，减小 APK 体积
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # 运行时权限（Android 6+ 需要动态申请，见 native/android_permissions.py）：
 # CAMERA                  拍照（系统相机）
