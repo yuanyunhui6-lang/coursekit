@@ -57,12 +57,23 @@ jobs:
 
       - name: 安装系统依赖
         run: |
-          sudo apt-get update
+          set -o pipefail
+          # apt 源偶发 403/超时，重试 3 次
+          for attempt in 1 2 3; do
+            if sudo apt-get update -y 2>&1 | tee -a apt.log; then
+              break
+            fi
+            echo "apt-get update 第 $attempt 次失败，10 秒后重试"
+            sleep 10
+          done
           sudo apt-get install -y --no-install-recommends \
             git zip unzip openjdk-17-jdk-headless \
             autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
-            cmake libffi-dev libssl-dev
+            zlib1g-dev libncurses-dev \
+            cmake libffi-dev libssl-dev 2>&1 | tee -a apt.log
+          # libtinfo5 在部分 Ubuntu 版本已移除，缺失也不影响 p4a 2024
+          sudo apt-get install -y --no-install-recommends libtinfo5 2>&1 | tee -a apt.log || \
+            echo "libtinfo5 不可用，跳过（不影响 p4a 2024 构建）"
           java -version
           df -h /
 
@@ -96,18 +107,21 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, re
-          path = "buildozer.log"
-          if os.path.exists(path):
-              with open(path, errors="replace") as fh:
-                  lines = fh.read().splitlines()
+          log = ""
+          for path in ("buildozer.log", "apt.log"):
+              if os.path.exists(path):
+                  with open(path, errors="replace") as fh:
+                      log += f"\n===== {path} =====\n" + fh.read()
+          if log.strip():
+              lines = log.splitlines()
               patterns = re.compile(
                   r"(?i)(error:|fatal error|command failed|traceback|"
                   r"recipe .*(failed|error)|no such file|undefined reference|"
-                  r"could not find|failed to)")
+                  r"could not find|failed to|E: |unable to locate)")
               hits = [ln for ln in lines if patterns.search(ln)]
               tail = "\n".join((hits or lines)[-40:])
           else:
-              tail = "buildozer.log 不存在：构建在 buildozer 启动前就失败了"
+              tail = "buildozer.log 与 apt.log 都不存在：构建在安装依赖前就失败了"
           escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           if len(escaped) > 60000:
               escaped = escaped[-60000:]
@@ -119,7 +133,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: buildozer-log
-          path: buildozer.log
+          path: |
+            buildozer.log
+            apt.log
           if-no-files-found: ignore
           retention-days: 30
 
