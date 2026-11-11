@@ -63,8 +63,19 @@ jobs:
       - name: 拉取官方 buildozer 镜像
         run: docker pull kivy/buildozer:latest
 
-      - name: 构建 debug APK
+      - name: 构建环境自检
         run: |
+          echo "=== Docker / 磁盘 ==="
+          docker version --format '{{.Server.Version}}' || true
+          df -h / | tail -1
+          echo "=== 镜像内工具版本 ==="
+          docker run --rm --entrypoint bash kivy/buildozer:latest -lc \
+            "buildozer --version 2>&1 | head -3; python3 --version; java -version 2>&1 | head -2; echo NDK:; ls ~/.buildozer/android/platform 2>/dev/null | head || true" || true
+
+      - name: 构建 debug APK
+        id: build
+        run: |
+          set -o pipefail
           docker run --rm \
             --volume "$GITHUB_WORKSPACE":/home/user/hostcwd \
             --volume "$HOME/.buildozer":/home/user/.buildozer \
@@ -74,9 +85,37 @@ jobs:
             --env LANG=C.UTF-8 \
             --env LC_ALL=C.UTF-8 \
             --env APP_ANDROID_ACCEPT_SDK_LICENSE=1 \
-            kivy/buildozer android debug
+            kivy/buildozer android debug 2>&1 | tee buildozer.log
+
+      - name: 失败时把错误写进注解（供 API 读取）
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os
+          path = "buildozer.log"
+          if os.path.exists(path):
+              with open(path, errors="replace") as fh:
+                  lines = fh.read().splitlines()
+              tail = "\n".join(lines[-45:])
+          else:
+              tail = "buildozer.log 不存在：构建在 docker 启动前就失败了"
+          escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          if len(escaped) > 60000:
+              escaped = escaped[-60000:]
+          print("::error::" + escaped)
+          PY
+
+      - name: 上传构建日志（无论成败）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-log
+          path: buildozer.log
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: 检查 APK 产物
+        if: success()
         run: |
           echo "bin/ 目录内容："
           ls -lh bin/ || true
@@ -86,6 +125,7 @@ jobs:
           fi
 
       - name: 上传 APK（artifact）
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: coursekit-debug-apk
