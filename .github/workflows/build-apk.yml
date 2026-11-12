@@ -88,14 +88,22 @@ jobs:
             echo "::error::openjdk-17 安装失败，构建无法继续"
             exit 1
           fi
+          # GitHub runner 使用 Adoptium JDK，Java 信任库在 /etc/ssl/certs/adoptium/cacerts，
+          # 软链到 buildozer/Java 期望的标准路径，避免 ca-certificates-java 警告。
+          if [ ! -e /etc/ssl/certs/java/cacerts ] && [ -e /etc/ssl/certs/adoptium/cacerts ]; then
+            sudo mkdir -p /etc/ssl/certs/java
+            sudo ln -sf /etc/ssl/certs/adoptium/cacerts /etc/ssl/certs/java/cacerts
+          fi
+          ls -l /etc/ssl/certs/java/cacerts 2>/dev/null || true
           java -version
           df -h /
 
       - name: 安装 buildozer + python-for-android（固定版本）
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "buildozer==1.5.0" "python-for-android==2024.1.21"
+          python -m pip install "buildozer==1.5.0" "python-for-android==2024.1.21" "cython==3.0.12"
           python -m pip show python-for-android | head -5
+          command -v cython && cython --version
 
       - name: 构建环境自检
         run: |
@@ -121,21 +129,18 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, re
-          log = ""
-          for path in ("buildozer.log", "apt.log"):
-              if os.path.exists(path):
-                  with open(path, errors="replace") as fh:
-                      log += f"\n===== {path} =====\n" + fh.read()
-          if log.strip():
-              lines = log.splitlines()
-              patterns = re.compile(
-                  r"(?i)(error:|fatal error|command failed|traceback|"
-                  r"recipe .*(failed|error)|no such file|undefined reference|"
-                  r"could not find|failed to|E: |unable to locate)")
-              hits = [ln for ln in lines if patterns.search(ln)]
-              tail = "\n".join((hits or lines)[-40:])
-          else:
-              tail = "buildozer.log 与 apt.log 都不存在：构建在安装依赖前就失败了"
+          parts = []
+          if os.path.exists("buildozer.log"):
+              with open("buildozer.log", errors="replace") as fh:
+                  blines = fh.read().splitlines()
+              parts.append("[buildozer.log 尾部]\n" + "\n".join(blines[-60:]))
+          if os.path.exists("apt.log"):
+              with open("apt.log", errors="replace") as fh:
+                  alines = fh.read().splitlines()
+              ahits = [ln for ln in alines if re.search(r"(?i)(^E:|error:|failed|cannot open|unable to)", ln)]
+              if ahits:
+                  parts.append("[apt.log 错误]\n" + "\n".join(ahits[-15:]))
+          tail = "\n\n".join(parts) if parts else "buildozer.log 与 apt.log 都不存在：构建在安装依赖前就失败了"
           escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           if len(escaped) > 60000:
               escaped = escaped[-60000:]
