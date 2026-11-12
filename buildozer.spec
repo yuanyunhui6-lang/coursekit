@@ -49,6 +49,10 @@ presplash.filename = %(source.dir)s/assets/presplash.png
 # 它们要么没有 p4a 配方、要么会让 APK 体积暴涨甚至构建失败。
 requirements = python3,kivy==2.3.0,plyer,pyjnius
 
+# 固定 python-for-android 版本：新版 p4a master 默认 Python 3.14，
+# Kivy 2.3.0 的 C 扩展无法在 3.14 下编译；2024.1.21 默认 Python 3.11.5。
+p4a.branch = v2024.01.21
+
 # 只允许竖屏（课件阅读以竖屏为主）
 orientation = portrait
 

@@ -111,6 +111,12 @@ jobs:
           python -m pip show python-for-android | head -5
           command -v cython && cython --version
 
+      - name: 清理旧 p4a 克隆与构建产物（保留 SDK/NDK 缓存）
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/.buildozer/android/platform/python-for-android" \
+                 "$GITHUB_WORKSPACE/.buildozer/android/platform/build-arm64-v8a"
+          ls -d "$HOME/.buildozer/android/platform/"* 2>/dev/null || true
+
       - name: 构建环境自检
         run: |
           buildozer --version
