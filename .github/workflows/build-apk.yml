@@ -71,18 +71,19 @@ jobs:
           done
           for attempt in 1 2 3; do
             if sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
-              git zip unzip openjdk-17-jdk-headless \
+              git zip unzip openjdk-17-jdk-headless ca-certificates-java \
               autoconf automake libtool pkg-config \
               zlib1g-dev libncurses-dev \
-              cmake libffi-dev libssl-dev 2>&1 | tee -a apt.log; then
+              cmake libffi-dev libssl-dev patchelf 2>&1 | tee -a apt.log; then
               break
             fi
             echo "apt-get install 第 $attempt 次失败，15 秒后重试"
             sleep 15
           done
-          # libtinfo5 在部分 Ubuntu 版本已移除，缺失不影响 p4a 2024
-          sudo apt-get install -y --no-install-recommends libtinfo5 2>&1 | tee -a apt.log || \
-            echo "libtinfo5 不可用，跳过（不影响 p4a 2024 构建）"
+          # 旧版 ncurses / tinfo 在部分 Ubuntu 版本已移除，缺失不影响 p4a 2024
+          sudo apt-get install -y --no-install-recommends \
+            libtinfo5 libncurses5-dev libncursesw5-dev 2>&1 | tee -a apt.log || \
+            echo "旧版 ncurses/tinfo 不可用，跳过（不影响 p4a 2024 构建）"
           if ! dpkg -s openjdk-17-jdk-headless >/dev/null 2>&1; then
             echo "::error::openjdk-17 安装失败，构建无法继续"
             exit 1
