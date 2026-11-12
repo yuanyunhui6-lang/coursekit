@@ -55,6 +55,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-p4a2024-
 
+      - name: 释放磁盘空间（p4a + SDK/NDK 需要 10GB+）
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell || true
+          df -h /
+
       - name: 安装系统依赖
         run: |
           set -o pipefail
@@ -133,7 +139,11 @@ jobs:
           if os.path.exists("buildozer.log"):
               with open("buildozer.log", errors="replace") as fh:
                   blines = fh.read().splitlines()
-              parts.append("[buildozer.log 尾部]\n" + "\n".join(blines[-60:]))
+              err = re.compile(r"(?i)(error|failed|failure|traceback|exception|cannot|denied|no space|killed|not found|command failed)")
+              hits = [ln for ln in blines if err.search(ln)]
+              if hits:
+                  parts.append("[buildozer.log 错误行]\n" + "\n".join(hits[-30:]))
+              parts.append("[buildozer.log 尾部 25 行]\n" + "\n".join(blines[-25:]))
           if os.path.exists("apt.log"):
               with open("apt.log", errors="replace") as fh:
                   alines = fh.read().splitlines()
